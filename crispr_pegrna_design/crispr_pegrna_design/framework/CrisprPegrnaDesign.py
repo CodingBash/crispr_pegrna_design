@@ -7,6 +7,7 @@ from typeguard import typechecked
 from typing import Union, List, Tuple, Mapping
 import numpy as np
 import random
+import pandas as pd
 
 # Python class of a Codon
 @dataclasses.dataclass
@@ -155,6 +156,45 @@ class HelperFunctions:
         '''Find all positions of substr string in mainstr string'''
         return np.asarray([m.start() for m in re.finditer('(?={})'.format(str(substr).upper()), str(mainstr).upper())])
 
+    # Function to trim edits, i.e. (AGGC/ATTC) will be trimmed to (GG/TT) since first and last positions are the same.
+    @typechecked
+    @staticmethod
+    def trim_edits(original_sequence: str, new_sequence: str):
+        # Get original and new sequence, uppercase
+        original_sequence = original_sequence.upper()
+        new_sequence = new_sequence.upper()
+        
+        # Ensure sequences are the same length and are not identical
+        assert len(original_sequence) == len(new_sequence), "Sequences are not same length"
+        assert original_sequence != new_sequence, "Sequences are equivalent"
+        
+        # Find first position that is not identical
+        left_index_same = 0
+        for i in range(len(original_sequence)):
+            if original_sequence[i] == new_sequence[i]:
+                continue
+            else:
+                left_index_same = i
+                break
+        
+        # Find last position that is not identical
+        right_index_same = len(original_sequence)
+        for i in range(len(original_sequence)):
+            if original_sequence[len(original_sequence)-i-1] == new_sequence[len(original_sequence)-i-1]:
+                continue
+            else:
+                right_index_same = len(original_sequence)-i
+                break
+                
+        # Index to get new sequences
+        left_sequence_same = original_sequence[:left_index_same]
+        right_sequence_same = original_sequence[right_index_same:]
+        original_sequence_different = original_sequence[left_index_same:right_index_same]
+        new_sequence_different = new_sequence[left_index_same:right_index_same]
+        
+        # Return
+        return((left_index_same, right_index_same), (left_sequence_same, right_sequence_same), (original_sequence_different, new_sequence_different))
+
 import numpy as np
 import random
 
@@ -166,7 +206,7 @@ class MutatedCodon:
 
 # Note 9/21/2022 - only just supporting one codon sample since for our case it is just the stop codon, could change to list of tuples to support more in the future
 @typechecked
-def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSequence, dna_codon_frequency_map: Mapping[str, List[Tuple[str, float]]], dna_codon_map: Mapping[str, str], ignore_codon_letters: List[str] = ["_"], add_synonymous_mutations:bool=False, highest_frequent_codon:bool=False):
+def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSequence, dna_codon_frequency_map: Mapping[str, List[Tuple[str, float]]], dna_codon_map: Mapping[str, str], ignore_codon_letters: List[str] = ["_"], add_synonymous_mutations:bool=False, highest_frequent_codon:bool=False) -> List[Tuple[int, Codon, List]]:
     '''
         Helper function for getting the final mutant sequence
     '''
@@ -177,7 +217,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
             new_sequence_left = "".join([str(codon.codon_sequence) for codon in codon_set_arg[:codon_index]])
             new_sequence_codon = str(codon_set_arg[codon_index].codon_sequence)
             new_sequence_right = "".join([str(codon.codon_sequence) for codon in codon_set_arg[codon_index+1:]])
-            new_sequence_spaced = new_sequence_left +" "+new_sequence_codon + " " + new_sequence_right
+            new_sequence_spaced = new_sequence_left + " " + new_sequence_codon + " " + new_sequence_right
         return new_sequence, new_sequence_spaced
             
     
@@ -195,7 +235,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
     '''
         Iterate through each codon (which will be mutated to every other codon)
     '''
-    tiled_codon_mutations:List[List[List[Mappable]]] = []
+    tiled_codon_mutations:List[Tuple[int, Codon, List]] = []
     tiled_codon: Codon
     codon_index: int
     for codon_index, tiled_codon in enumerate(coding_tiling_sequence.tiled_codon_set):
@@ -250,7 +290,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
             for mutated_DNA_codon in mutated_DNA_codons:
                 mutated_codon: Codon = dataclasses.replace(tiled_codon)
                 mutated_codon.codon_sequence = mutated_DNA_codon
-                mutated_codon_obj = MutatedCodon(original_codon=tiled_codon, mutated_codon=mutated_codon, hamming_distance=calculate_hamming(mutated_codon.codon_sequence, tiled_codon.codon_sequence))
+                mutated_codon_obj = MutatedCodon(original_codon=tiled_codon, mutated_codon=mutated_codon, hamming_distance=HelperFunctions.calculate_hamming(mutated_codon.codon_sequence, tiled_codon.codon_sequence))
                 mutated_codons.append(mutated_codon_obj)
 
                     
@@ -260,7 +300,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                 
                 This is where the main pegRNA design is done.
             '''
-            mutated_codon_sequence_mutations: List[Mappable] = []
+            mutated_codon_sequence_mutations: List[Mapping] = []
             mutated_codon_i: int
             mutated_codon: MutatedCodon
             for mutated_codon_i, mutated_codon in enumerate(mutated_codons):
@@ -281,8 +321,8 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                 '''
                      Get the position of the mutated truncleotide that is different (which determines the exact position the RT can start)
                 '''
-                first_position_difference = get_first_position_difference(mutated_codon.original_codon.codon_sequence, mutated_codon.mutated_codon.codon_sequence) # This is for the forward orientaion
-                last_position_difference = get_last_position_difference(mutated_codon.original_codon.codon_sequence, mutated_codon.mutated_codon.codon_sequence) # This is for the reverse complement orientation
+                first_position_difference = HelperFunctions.get_first_position_difference(mutated_codon.original_codon.codon_sequence, mutated_codon.mutated_codon.codon_sequence) # This is for the forward orientaion
+                last_position_difference = HelperFunctions.get_last_position_difference(mutated_codon.original_codon.codon_sequence, mutated_codon.mutated_codon.codon_sequence) # This is for the reverse complement orientation
                 assert first_position_difference >= 0 and first_position_difference < 3
                 assert last_position_difference >= 0 and last_position_difference < 3
                 
@@ -303,7 +343,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                 possible_pam_sequence_forward_START = most_upstream_nick_site_forward+3 # This would place the last SNV to edit at the last position of the RTT, the +3 is pass the 3nt seed to the start PAM
                 possible_pam_sequence_forward_END = most_downstream_nick_site_forward+6 # This would place the first SNV to edit at the first position of the RTT, the +6 is to pass the 3nt seed and 3nt PAM to end at the end of the PAM
                 possible_pam_sequence_forward = str(complete_sequence[possible_pam_sequence_forward_START:possible_pam_sequence_forward_END])
-                possible_pam_sequence_forward_coordinates = possible_pam_sequence_forward_START + findall("GG", possible_pam_sequence_forward[1:]) # 
+                possible_pam_sequence_forward_coordinates = possible_pam_sequence_forward_START + HelperFunctions.findall("GG", possible_pam_sequence_forward[1:]) # 
                 
                 '''
                     Retrieve the possible coordinates of the RTT reverse pegRNA
@@ -320,7 +360,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                 possible_pam_sequence_reverse_START = most_upstream_nick_site_reverse+3 # This would place the last SNV to edit at the last position of the RTT
                 possible_pam_sequence_reverse_END = most_downstream_nick_site_reverse+6 # This would place the first SNV to edit at the first position of the RTT
                 possible_pam_sequence_reverse = str(complete_sequence_revcomp[possible_pam_sequence_reverse_START:possible_pam_sequence_reverse_END])
-                possible_pam_sequence_reverse_coordinates = possible_pam_sequence_reverse_START + findall("GG", possible_pam_sequence_reverse[1:]) # 
+                possible_pam_sequence_reverse_coordinates = possible_pam_sequence_reverse_START + HelperFunctions.findall("GG", possible_pam_sequence_reverse[1:]) # 
                 
                 '''
                     STEP1 Check if the edit already mutates the PAM/seed by iterating through all possible PAMs.
@@ -444,9 +484,9 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                                         - What is the last position of a difference between the original and mutated codon.
                                         - What are all positional differences between the original and mutated codon.
                                     '''
-                                    syn_codon_first_position_difference = get_first_position_difference(codon_sequence, syn_codon) 
-                                    syn_codon_last_position_difference = get_last_position_difference(codon_sequence, syn_codon)
-                                    syn_codon_all_position_differences = get_all_position_differences(codon_sequence, syn_codon)
+                                    syn_codon_first_position_difference = HelperFunctions.get_first_position_difference(codon_sequence, syn_codon) 
+                                    syn_codon_last_position_difference = HelperFunctions.get_last_position_difference(codon_sequence, syn_codon)
+                                    syn_codon_all_position_differences = HelperFunctions.get_all_position_differences(codon_sequence, syn_codon)
                                     
                                     syn_codon_first_position_difference_absolute = get_codon_start_absolute_fwd(codon) + syn_codon_first_position_difference
                                     syn_codon_last_position_difference_absolute =  get_codon_start_absolute_fwd(codon) + syn_codon_last_position_difference
@@ -483,7 +523,7 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                                     
                                     mutated_syn_codon: Codon = dataclasses.replace(codon)
                                     mutated_syn_codon.codon_sequence = syn_codon
-                                    mutated_syn_codon_obj = MutatedCodon(original_codon=codon, mutated_codon=mutated_syn_codon, hamming_distance=calculate_hamming(mutated_syn_codon.codon_sequence, codon.codon_sequence))
+                                    mutated_syn_codon_obj = MutatedCodon(original_codon=codon, mutated_codon=mutated_syn_codon, hamming_distance=HelperFunctions.calculate_hamming(mutated_syn_codon.codon_sequence, codon.codon_sequence))
                                     mutated_codon_sequence_mutations.append({"tiled_mutated_codon": mutated_codon, "coding_mutated_codon": mutated_syn_codon_obj, "is_edit_pam_disrupting": is_edit_fwd_pam_disrupting, "is_edit_seed_disrupting": is_edit_fwd_seed_disrupting, "orientation": "+", "protospacers": protospacer})
                                 
                     # Contains list of PAM-disrupting synonymous mutations for rev pegRNA: SynCodon, OrigCodon, pam_position
@@ -532,9 +572,9 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                                         - What are all positional differences between the original and mutated codon.
                                     '''
                                     syn_codon_revcomp = str(Seq(syn_codon).reverse_complement())
-                                    syn_codon_first_position_difference = get_first_position_difference(codon_sequence_revcomp, syn_codon_revcomp) 
-                                    syn_codon_last_position_difference = get_last_position_difference(codon_sequence_revcomp, syn_codon_revcomp)
-                                    syn_codon_all_position_differences = get_all_position_differences(codon_sequence_revcomp, syn_codon_revcomp)
+                                    syn_codon_first_position_difference = HelperFunctions.get_first_position_difference(codon_sequence_revcomp, syn_codon_revcomp) 
+                                    syn_codon_last_position_difference = HelperFunctions.get_last_position_difference(codon_sequence_revcomp, syn_codon_revcomp)
+                                    syn_codon_all_position_differences = HelperFunctions.get_all_position_differences(codon_sequence_revcomp, syn_codon_revcomp)
 
                                     syn_codon_first_position_difference_absolute = get_codon_stop_absolute_rev(codon) + syn_codon_first_position_difference
                                     syn_codon_last_position_difference_absolute =  get_codon_stop_absolute_rev(codon) + syn_codon_last_position_difference
@@ -571,8 +611,104 @@ def mutate_sequence_primeeditingscreen(coding_tiling_sequence: CodingTilingSeque
                                     
                                     mutated_syn_codon: Codon = dataclasses.replace(codon)
                                     mutated_syn_codon.codon_sequence = syn_codon
-                                    mutated_syn_codon_obj = MutatedCodon(original_codon=codon, mutated_codon=mutated_syn_codon, hamming_distance=calculate_hamming(mutated_syn_codon.codon_sequence, codon.codon_sequence))
+                                    mutated_syn_codon_obj = MutatedCodon(original_codon=codon, mutated_codon=mutated_syn_codon, hamming_distance=HelperFunctions.calculate_hamming(mutated_syn_codon.codon_sequence, codon.codon_sequence))
                                     mutated_codon_sequence_mutations.append({"tiled_mutated_codon": mutated_codon, "coding_mutated_codon": mutated_syn_codon_obj, "is_edit_pam_disrupting": is_edit_rev_pam_disrupting, "is_edit_seed_disrupting": is_edit_rev_seed_disrupting, "orientation": "-", "protospacers": protospacer})
             mutated_codon_letter_mutations.append((codon_letter, mutated_codon_letter, mutated_codon_sequence_mutations))
         tiled_codon_mutations.append((codon_index, tiled_codon, mutated_codon_letter_mutations))    
     return tiled_codon_mutations 
+
+
+
+def generate_pridict_input(coding_tiling_sequence: CodingTilingSequence, tiled_codon_mutations: List[Tuple[int, Codon, List]]) -> List[pd.Series]:
+    pridict_sequences:List[pd.Series] = [] 
+    tiled_codon_mutation: Tuple[int, Codon, List]
+    # Iterate through each codon in the tiled region
+    for tiled_codon_mutation in tiled_codon_mutations:
+
+        codon_index = tiled_codon_mutation[0]
+        original_codon = tiled_codon_mutation[1]
+        mutated_codon_letter_mutations = tiled_codon_mutation[2]
+        mutated_codon_letter_mutation: Tuple[str, List]
+
+        # Iterate through each new codon letter to mutate to for the particular original codon
+        for mutated_codon_letter_mutation in mutated_codon_letter_mutations:
+            codon_letter: str = mutated_codon_letter_mutation[0]
+            mutated_codon_letter:str = mutated_codon_letter_mutation[1]
+            mutated_codon_sequence_mutations:List = mutated_codon_letter_mutation[2]
+
+            # Iterate through each new codon sequence for the new codon letter to mutate to
+            for mutated_codon_sequence_mutation in mutated_codon_sequence_mutations:
+                # Retrieve the necessary information for the PRIDICT input
+                tiled_mutated_codon: MutatedCodon = mutated_codon_sequence_mutation["tiled_mutated_codon"]
+                coding_mutated_codon: MutatedCodon = mutated_codon_sequence_mutation["coding_mutated_codon"]
+                is_edit_pam_disrupting: bool = mutated_codon_sequence_mutation["is_edit_pam_disrupting"]
+                is_edit_seed_disrupting: bool = mutated_codon_sequence_mutation["is_edit_seed_disrupting"]
+                orientation: str = mutated_codon_sequence_mutation["orientation"]
+                protospacer: List[Tuple[str,int, bool]] = mutated_codon_sequence_mutation["protospacers"]
+                protospacer = [(str(proto[0]), proto[1], proto[2]) for proto in protospacer]
+
+                for proto in protospacer:
+                    assert proto[0][-2:] == "GG", "{} does not have an NGG PAM".format(proto[0])
+
+                '''
+                    For everything below, prepare PRIDICT inputs and save
+                '''
+                tiled_mutated_codon_start_abs = coding_tiling_sequence.tiling_coordinates[0] + tiled_mutated_codon.mutated_codon.genome_index_start
+                tiled_mutated_codon_stop_abs = coding_tiling_sequence.tiling_coordinates[0] + tiled_mutated_codon.mutated_codon.genome_index_stop
+
+                first_codon = tiled_mutated_codon
+                first_codon_start = tiled_mutated_codon_start_abs
+                first_codon_stop = tiled_mutated_codon_stop_abs
+
+                last_codon = tiled_mutated_codon
+                last_codon_start = tiled_mutated_codon_start_abs
+                last_codon_stop = tiled_mutated_codon_stop_abs
+                hamming_distance = tiled_mutated_codon.hamming_distance
+                if coding_mutated_codon != None:
+                    coding_mutated_codon_start_abs = coding_tiling_sequence.coding_coordinates[0] + coding_mutated_codon.mutated_codon.genome_index_start
+                    coding_mutated_codon_stop_abs = coding_tiling_sequence.coding_coordinates[0] + coding_mutated_codon.mutated_codon.genome_index_stop
+                    hamming_distance += coding_mutated_codon.hamming_distance
+                    if coding_mutated_codon_start_abs < tiled_mutated_codon_start_abs:
+                        first_codon = coding_mutated_codon
+                        first_codon_start = coding_mutated_codon_start_abs
+                        first_codon_stop = coding_mutated_codon_stop_abs
+                    else:
+                        last_codon = coding_mutated_codon
+                        last_codon_start = coding_mutated_codon_start_abs
+                        last_codon_stop = coding_mutated_codon_stop_abs
+
+                left_sequence_length = 100
+                right_sequence_length = 100
+
+                left_sequence = coding_tiling_sequence.complete_sequence[first_codon_start-left_sequence_length:first_codon_start]
+                first_codon_original = str(first_codon.original_codon.codon_sequence)
+                first_codon_mutated = str(first_codon.mutated_codon.codon_sequence)
+
+                last_codon_original = str(last_codon.original_codon.codon_sequence)
+                last_codon_mutated = str(last_codon.mutated_codon.codon_sequence)
+
+                sequence_between = coding_tiling_sequence.complete_sequence[first_codon_stop:last_codon_start]
+
+                right_sequence = coding_tiling_sequence.complete_sequence[last_codon_stop:last_codon_stop+right_sequence_length]
+
+                mutation_sequence = None
+                if first_codon != last_codon:
+                    original_sequence = first_codon_original + sequence_between + last_codon_original 
+                    new_sequence = first_codon_mutated + sequence_between + last_codon_mutated
+
+                    (left_index_same, right_index_same), (left_sequence_same, right_sequence_same), (original_sequence_different, new_sequence_different) = HelperFunctions.trim_edits(original_sequence=original_sequence, new_sequence=new_sequence)
+                    mutation_sequence = original_sequence_different + "/" + new_sequence_different
+                    pridict_sequence = left_sequence + left_sequence_same + "({})".format(mutation_sequence) + right_sequence_same + right_sequence
+                else:
+                    (left_index_same, right_index_same), (left_sequence_same, right_sequence_same), (original_sequence_different, new_sequence_different) = HelperFunctions.trim_edits(original_sequence=first_codon_original, new_sequence=first_codon_mutated)
+                    mutation_sequence = original_sequence_different + "/" + new_sequence_different
+                    pridict_sequence = left_sequence + left_sequence_same + "({})".format(mutation_sequence) + right_sequence_same + right_sequence
+
+
+
+                pridict_sequences.append(pd.Series([codon_index, original_codon.genome_index_start, original_codon.genome_index_stop, codon_letter, mutated_codon_letter, str(original_codon.codon_sequence),
+                        str(tiled_mutated_codon.mutated_codon.codon_sequence),str(coding_mutated_codon.original_codon.codon_sequence) if coding_mutated_codon != None else None, str(coding_mutated_codon.mutated_codon.codon_sequence) if coding_mutated_codon != None else None, is_edit_pam_disrupting, is_edit_seed_disrupting, orientation, hamming_distance, protospacer, str(mutation_sequence), str(pridict_sequence)],
+                                                index=["codon_index", "codon_relative_start", "codon_relative_stop", "original_codon_letter", "mutated_codon_letter", "original_codon_sequence", "mutated_codon_sequence", "original_synonymous_mutation", "mutated_synonymous_mutation", "is_edit_pam_disrupting", "is_edit_seed_disrupting", "pegRNA_orientation", "hamming", "protospacers_with_pam", "sequence_swap", "pridict_sequence"]))
+    return pridict_sequences
+
+
